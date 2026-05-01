@@ -78,7 +78,8 @@ PLOT_LAYOUT = dict(
 # ── Data fetching ──────────────────────────────────────────────────────────────
 
 @st.cache_data(ttl=86400, show_spinner=False)
-def fetch_nao() -> pd.DataFrame:
+def fetch_nao_monthly_all() -> pd.DataFrame:
+    """Full monthly NAO history since 1950 — used for percentile calculation."""
     url = ("https://www.cpc.ncep.noaa.gov/products/precip/CWlink/pna/"
            "norm.nao.monthly.b5001.current.ascii.table")
     try:
@@ -93,12 +94,42 @@ def fetch_nao() -> pd.DataFrame:
             for m, v in enumerate(parts[1:13], 1):
                 val = float(v)
                 if val != -99.9:
-                    rows.append({"date": pd.Timestamp(year=year, month=m, day=1), "nao": val})
+                    rows.append({"date": pd.Timestamp(year=year, month=m, day=1),
+                                 "nao": val, "month": m})
+        return pd.DataFrame(rows)
+    except Exception:
+        return pd.DataFrame(columns=["date", "nao", "month"])
+
+
+@st.cache_data(ttl=43200, show_spinner=False)
+def fetch_nao() -> pd.DataFrame:
+    """Daily NAO from NOAA CPC — future dates are forecasts."""
+    url = ("https://www.cpc.ncep.noaa.gov/products/precip/CWlink/pna/"
+           "norm.nao.daily.b500101.current.ascii")
+    today = datetime.now().date()
+    try:
+        r = requests.get(url, timeout=15)
+        r.raise_for_status()
+        rows = []
+        for line in r.text.strip().splitlines():
+            parts = line.split()
+            if len(parts) < 4:
+                continue
+            try:
+                yr, mo, dy, val = int(parts[0]), int(parts[1]), int(parts[2]), float(parts[3])
+                if val == -99.9:
+                    continue
+                dt = pd.Timestamp(year=yr, month=mo, day=dy)
+                rows.append({"date": dt, "nao": val,
+                             "forecast": dt.date() > today,
+                             "winter": mo in (10, 11, 12, 1, 2, 3, 4)})
+            except Exception:
+                pass
         df = pd.DataFrame(rows)
-        cutoff = pd.Timestamp.now() - pd.DateOffset(months=36)
+        cutoff = pd.Timestamp.now() - pd.DateOffset(days=120)
         return df[df["date"] >= cutoff].reset_index(drop=True)
     except Exception:
-        return pd.DataFrame(columns=["date", "nao"])
+        return pd.DataFrame(columns=["date", "nao", "forecast", "winter"])
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
@@ -305,17 +336,35 @@ st.markdown(
 
 # Fetch
 with st.spinner("Loading data..."):
-    nao_df   = fetch_nao()
-    temp_raw = fetch_temperature(365)
-    wind_df  = fetch_wind(90)
-    price_df = fetch_prices(90)
+    nao_df    = fetch_nao()
+    nao_hist  = fetch_nao_monthly_all()
+    temp_raw  = fetch_temperature(365)
+    wind_df   = fetch_wind(90)
+    price_df  = fetch_prices(90)
 
 temp_df = add_hdd_deviation(temp_raw)
 
-# Current values
-latest_nao  = nao_df["nao"].iloc[-1]  if not nao_df.empty  else None
-prev_nao    = nao_df["nao"].iloc[-2]  if len(nao_df) >= 2  else None
-nao_month   = nao_df["date"].iloc[-1].strftime("%m/%Y") if not nao_df.empty else "–"
+# Current values — use last observed (non-forecast) NAO
+nao_obs = nao_df[~nao_df["forecast"]] if not nao_df.empty and "forecast" in nao_df.columns else nao_df
+latest_nao  = nao_obs["nao"].iloc[-1]  if not nao_obs.empty else None
+prev_nao    = nao_obs["nao"].iloc[-2]  if len(nao_obs) >= 2 else None
+nao_month   = nao_obs["date"].iloc[-1].strftime("%d.%m.%Y") if not nao_obs.empty else "–"
+
+# Phase persistence: consecutive days on same side of zero
+nao_phase_days = 0
+if not nao_obs.empty and latest_nao is not None:
+    sign = np.sign(latest_nao)
+    for v in reversed(nao_obs["nao"].tolist()):
+        if np.sign(v) == sign:
+            nao_phase_days += 1
+        else:
+            break
+
+# Historical percentile (winter months Oct-Apr only)
+nao_pct = None
+if not nao_hist.empty and latest_nao is not None:
+    winter_vals = nao_hist[nao_hist["month"].isin([10,11,12,1,2,3,4])]["nao"]
+    nao_pct = int((winter_vals < latest_nao).mean() * 100)
 
 recent_temp = temp_df[temp_df["date"] >= datetime.now() - timedelta(days=30)] if not temp_df.empty else pd.DataFrame()
 hdd_dev_avg = recent_temp["hdd_dev"].mean() if not recent_temp.empty else None
@@ -344,13 +393,13 @@ c1, c2, c3, c4, c5 = st.columns(5)
 
 with c1:
     val = f"{latest_nao:+.2f}" if latest_nao is not None else "–"
-    delta = f"{latest_nao - prev_nao:+.2f} prev. month" if latest_nao is not None and prev_nao is not None else ""
+    pct_str = f"Pct {nao_pct}% (winter hist.)" if nao_pct is not None else ""
     col = "#e63946" if latest_nao is not None and latest_nao < -1 else \
           "#ff6b35" if latest_nao is not None and latest_nao < 0 else \
           "#2ecc71" if latest_nao is not None and latest_nao > 0.5 else "#00b4d8"
     lbl = "Negative" if latest_nao is not None and latest_nao < -0.5 else \
           "Positive" if latest_nao is not None and latest_nao > 0.5 else "Neutral"
-    st.markdown(kpi_card(f"NAO ({nao_month})", val, lbl, col, delta), unsafe_allow_html=True)
+    st.markdown(kpi_card(f"NAO ({nao_month})", val, lbl, col, pct_str), unsafe_allow_html=True)
 
 with c2:
     val  = f"{hdd_dev_avg:+.1f} HDD/day" if hdd_dev_avg is not None else "–"
@@ -385,28 +434,150 @@ with c5:
 
 # ── NAO ───────────────────────────────────────────────────────────────────────
 
-section("NAO Index — 36 months")
+section("NAO Index — Daily (120 days + 2-week forecast)")
 
-if not nao_df.empty:
-    fig = go.Figure()
-    fig.add_hrect(y0=-5, y1=-1, fillcolor="rgba(230,57,70,.12)", line_width=0,
-                  annotation_text="High risk (NAO < −1)", annotation_position="top left",
-                  annotation_font_color="#e63946", annotation_font_size=11)
-    fig.add_hrect(y0=1, y1=5, fillcolor="rgba(46,204,113,.07)", line_width=0,
-                  annotation_text="Low risk (NAO > +1)", annotation_position="bottom right",
-                  annotation_font_color="#2ecc71", annotation_font_size=11)
-    fig.add_hline(y=0,    line_dash="dot",  line_color="#8b8fa8", line_width=1)
-    fig.add_hline(y=-1.0, line_dash="dash", line_color="#e63946", line_width=1)
-    bar_colors = ["#e63946" if v < 0 else "#2ecc71" for v in nao_df["nao"]]
-    fig.add_trace(go.Bar(
-        x=nao_df["date"], y=nao_df["nao"], marker_color=bar_colors,
-        hovertemplate="%{x|%m/%Y}: %{y:+.2f}<extra></extra>",
-    ))
-    fig.update_layout({**PLOT_LAYOUT, "height": 320, "showlegend": False,
-                       "yaxis": dict(range=[-4, 4], gridcolor="#2a2f3e", showgrid=True)})
-    st.plotly_chart(fig, use_container_width=True)
-else:
-    st.info("NAO data unavailable.")
+chart_col, info_col = st.columns([3, 1])
+
+with chart_col:
+    if not nao_df.empty:
+        obs = nao_df[~nao_df["forecast"]]
+        fct = nao_df[nao_df["forecast"]]
+
+        fig = go.Figure()
+
+        # Winter season shading (Oct–Apr) — add vrect for each winter band
+        yr_min = nao_df["date"].min().year
+        yr_max = nao_df["date"].max().year + 1
+        for y in range(yr_min, yr_max + 1):
+            fig.add_vrect(
+                x0=f"{y-1}-10-01", x1=f"{y}-04-30",
+                fillcolor="rgba(0,180,216,.06)", line_width=0,
+            )
+
+        # Risk zones
+        fig.add_hrect(y0=-5, y1=-1, fillcolor="rgba(230,57,70,.10)", line_width=0,
+                      annotation_text="High risk (NAO < −1)", annotation_position="top left",
+                      annotation_font_color="#e63946", annotation_font_size=11)
+        fig.add_hrect(y0=1, y1=5, fillcolor="rgba(46,204,113,.07)", line_width=0,
+                      annotation_text="Low risk (NAO > +1)", annotation_position="bottom right",
+                      annotation_font_color="#2ecc71", annotation_font_size=11)
+        fig.add_hline(y=0,   line_dash="dot",  line_color="#8b8fa8", line_width=1)
+        fig.add_hline(y=-1,  line_dash="dash", line_color="#e63946", line_width=1)
+
+        # Observed bars — winter brighter, summer muted
+        def bar_color(row):
+            if row["nao"] < 0:
+                return "rgba(230,57,70,1.0)" if row["winter"] else "rgba(230,57,70,0.45)"
+            return "rgba(46,204,113,1.0)" if row["winter"] else "rgba(46,204,113,0.45)"
+
+        obs_colors = obs.apply(bar_color, axis=1).tolist()
+        fig.add_trace(go.Bar(
+            x=obs["date"], y=obs["nao"], marker_color=obs_colors,
+            name="Observed",
+            hovertemplate="%{x|%d.%m.%Y}: %{y:+.2f}<extra></extra>",
+        ))
+
+        # Forecast bars — lighter
+        if not fct.empty:
+            fct_colors = ["rgba(230,57,70,0.4)" if v < 0 else "rgba(46,204,113,0.4)"
+                          for v in fct["nao"]]
+            fig.add_trace(go.Bar(
+                x=fct["date"], y=fct["nao"], marker_color=fct_colors,
+                marker_pattern_shape="/",
+                name="Forecast (NOAA)",
+                hovertemplate="%{x|%d.%m.%Y} [fcst]: %{y:+.2f}<extra></extra>",
+            ))
+
+        fig.update_layout({**PLOT_LAYOUT, "height": 360,
+                           "yaxis": dict(range=[-4, 4], gridcolor="#2a2f3e", showgrid=True),
+                           "legend": dict(bgcolor="#1a1f2e", bordercolor="#2a2f3e",
+                                          orientation="h", y=1.08)})
+        st.plotly_chart(fig, use_container_width=True)
+
+        # Percentile + persistence row
+        p1, p2, p3 = st.columns(3)
+        with p1:
+            pct_color = "#e63946" if nao_pct is not None and nao_pct < 25 else \
+                        "#2ecc71" if nao_pct is not None and nao_pct > 75 else "#00b4d8"
+            st.markdown(f"""
+            <div style="background:#1a1f2e;border-radius:8px;padding:12px 16px;border-left:3px solid {pct_color}">
+              <div style="color:#8b8fa8;font-size:11px;text-transform:uppercase;letter-spacing:.6px">Winter percentile (since 1950)</div>
+              <div style="color:{pct_color};font-size:24px;font-weight:700">{nao_pct if nao_pct is not None else "–"}%</div>
+              <div style="color:#8b8fa8;font-size:11px">of all Oct–Apr months had lower NAO</div>
+            </div>""", unsafe_allow_html=True)
+        with p2:
+            phase = "Negative" if latest_nao is not None and latest_nao < 0 else "Positive"
+            ph_color = "#e63946" if phase == "Negative" else "#2ecc71"
+            st.markdown(f"""
+            <div style="background:#1a1f2e;border-radius:8px;padding:12px 16px;border-left:3px solid {ph_color}">
+              <div style="color:#8b8fa8;font-size:11px;text-transform:uppercase;letter-spacing:.6px">Phase persistence</div>
+              <div style="color:{ph_color};font-size:24px;font-weight:700">{nao_phase_days} days</div>
+              <div style="color:#8b8fa8;font-size:11px">{phase} phase in a row</div>
+            </div>""", unsafe_allow_html=True)
+        with p3:
+            fct_val = fct["nao"].mean() if not fct.empty else None
+            fct_color = "#e63946" if fct_val is not None and fct_val < -0.5 else \
+                        "#2ecc71" if fct_val is not None and fct_val > 0.5 else "#00b4d8"
+            fct_str = f"{fct_val:+.2f}" if fct_val is not None else "–"
+            st.markdown(f"""
+            <div style="background:#1a1f2e;border-radius:8px;padding:12px 16px;border-left:3px solid {fct_color}">
+              <div style="color:#8b8fa8;font-size:11px;text-transform:uppercase;letter-spacing:.6px">Forecast avg (14d)</div>
+              <div style="color:{fct_color};font-size:24px;font-weight:700">{fct_str}</div>
+              <div style="color:#8b8fa8;font-size:11px">NOAA CPC ensemble</div>
+            </div>""", unsafe_allow_html=True)
+    else:
+        st.info("NAO data unavailable.")
+
+with info_col:
+    st.markdown("""
+    <div style="background:#1a1f2e;border-radius:12px;padding:16px;height:100%">
+      <div style="color:#e0e0e0;font-size:13px;font-weight:700;margin-bottom:12px;
+                  border-bottom:1px solid #2a2f3e;padding-bottom:8px">
+        NAO → Weather correlation
+      </div>
+
+      <div style="color:#e63946;font-size:12px;font-weight:700;margin-bottom:4px">
+        NAO Negative (&lt; −1)
+      </div>
+      <div style="color:#c0c0c0;font-size:11px;margin-bottom:12px;line-height:1.6">
+        🌡️ Cold air outbreaks from Russia/Arctic<br>
+        💨 Blocking high → weak westerlies<br>
+        🌬️ Low wind generation (Dunkelflaute risk)<br>
+        ❄️ High HDD, elevated heating demand<br>
+        💧 Low hydro inflows (frozen precipitation)<br>
+        ⚡ Spot prices elevated, adequacy risk
+      </div>
+
+      <div style="color:#2ecc71;font-size:12px;font-weight:700;margin-bottom:4px">
+        NAO Positive (&gt; +1)
+      </div>
+      <div style="color:#c0c0c0;font-size:11px;margin-bottom:12px;line-height:1.6">
+        🌡️ Mild Atlantic air, warmer than normal<br>
+        💨 Strong westerlies → high wind output<br>
+        🌧️ High precipitation → hydro reservoirs fill<br>
+        📉 Low HDD, reduced heating demand<br>
+        ⚡ Spot prices low, potential negatives<br>
+        ⚠️ Congestion risk from RES surplus
+      </div>
+
+      <div style="color:#f4d03f;font-size:12px;font-weight:700;margin-bottom:4px">
+        Key thresholds
+      </div>
+      <div style="color:#c0c0c0;font-size:11px;line-height:1.7">
+        &lt; −1.0 → Adequacy alert<br>
+        &lt; −1.5 for 4+ weeks → Critical<br>
+        &gt; +1.0 → Price suppression<br>
+        Oct–Apr = energy-relevant season<br>
+        Persistence &gt; 3 weeks = regime
+      </div>
+
+      <div style="color:#8b8fa8;font-size:10px;margin-top:12px;border-top:1px solid #2a2f3e;padding-top:8px">
+        Source: Bloomfield et al. 2021,<br>
+        Staffell & Pfenninger 2016,<br>
+        NOAA CPC teleconnections
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
 
 # ── Temperature deviation ─────────────────────────────────────────────────────
 
