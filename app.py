@@ -29,20 +29,42 @@ CITIES = {
     "Oulu":       (65.01, 25.47),
 }
 
-# Wind sites: major Nordic offshore/onshore wind regions
+# Wind sites: Swedish price areas + Finland
 WIND_SITES = {
-    "DK-West":  (56.0, 8.0),
-    "SE-South": (56.5, 14.0),
-    "NO-South": (58.5, 7.5),
-    "FI-West":  (63.0, 22.0),
+    "SE1 (N)":   (66.5, 22.0),   # Northern Sweden — Luleå/Skellefteå
+    "SE2 (N-C)": (62.4, 17.3),   # North-central Sweden — Sundsvall
+    "SE3 (C)":   (59.3, 18.1),   # Central Sweden — Stockholm
+    "SE4 (S)":   (55.6, 13.0),   # Southern Sweden — Malmö
+    "FI-West":   (63.0, 22.0),   # Finland west coast — Vaasa
 }
 
-AREA_LABELS = {"FI": "Finland", "SE3": "Sweden (SE3)", "NO2": "Norway (NO2)", "DK1": "Denmark (DK1)"}
+AREA_LABELS = {
+    "FI":  "Finland",
+    "EE":  "Estonia",
+    "SE1": "Sweden SE1",
+    "SE3": "Sweden SE3",
+    "SYS": "System price",
+}
 CITY_COLORS = {
     "Helsinki": "#00b4d8", "Stockholm": "#f4d03f",
     "Oslo": "#2ecc71", "Copenhagen": "#ff6b35", "Oulu": "#e63946",
 }
-AREA_COLORS = {"FI": "#00b4d8", "SE3": "#f4d03f", "NO2": "#2ecc71", "DK1": "#ff6b35"}
+AREA_COLORS = {
+    "FI":  "#00b4d8",
+    "EE":  "#a855f7",
+    "SE1": "#2ecc71",
+    "SE3": "#f4d03f",
+    "SYS": "#e63946",
+}
+
+# ENTSO-E bidding zone EIC codes
+ENTSOE_DOMAINS = {
+    "FI":  "10YFI-1--------U",
+    "EE":  "10Y1001A1001A39I",
+    "SE1": "10Y1001A1001A44P",
+    "SE3": "10Y1001A1001A46L",
+    "SYS": "10YNO-0--------C",   # Nordic system price (NO bidding zone proxy)
+}
 
 PLOT_LAYOUT = dict(
     paper_bgcolor="#1a1f2e", plot_bgcolor="#1a1f2e",
@@ -138,26 +160,52 @@ def wind_cf(ws: float) -> float:
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def fetch_prices(days: int = 90) -> pd.DataFrame:
-    # Fetch latest available records (no date filter — API data may lag months behind today)
-    url = (
-        "https://api.energidataservice.dk/dataset/Elspotprices"
-        f"?limit={days * 24 * 4}"
-        f'&filter={{"PriceArea":["DK1","FI","NO2","SE3"]}}'
-        "&sort=HourDK%20DESC"
-    )
-    try:
-        data = requests.get(url, timeout=20).json()
-        df = pd.DataFrame(data.get("records", []))
-        if df.empty:
-            return df
-        df["date"] = pd.to_datetime(df["HourDK"])
-        df["price"] = pd.to_numeric(df["SpotPriceEUR"], errors="coerce")
-        df = df[["date", "PriceArea", "price"]].dropna()
-        # Keep only the most recent `days` days relative to latest data point
-        latest = df["date"].max()
-        return df[df["date"] >= latest - timedelta(days=days)].sort_values("date")
-    except Exception:
+    api_key = st.secrets.get("ENTSOE_API_KEY", "")
+    if not api_key:
         return pd.DataFrame(columns=["date", "PriceArea", "price"])
+
+    end = pd.Timestamp.now(tz="Europe/Helsinki")
+    start = end - pd.Timedelta(days=days)
+    rows = []
+
+    for area, domain in ENTSOE_DOMAINS.items():
+        url = (
+            "https://web-api.tp.entsoe.eu/api"
+            f"?documentType=A44"
+            f"&in_Domain={domain}&out_Domain={domain}"
+            f"&periodStart={start.strftime('%Y%m%d%H%M')}"
+            f"&periodEnd={end.strftime('%Y%m%d%H%M')}"
+            f"&securityToken={api_key}"
+        )
+        try:
+            import xml.etree.ElementTree as ET
+            r = requests.get(url, timeout=20)
+            root = ET.fromstring(r.text)
+            ns = {"ns": "urn:iec62325.351:tc57wg16:451-3:publicationdocument:7:0"}
+            for ts in root.findall(".//ns:TimeSeries", ns):
+                period = ts.find("ns:Period", ns)
+                if period is None:
+                    continue
+                start_el = period.find("ns:timeInterval/ns:start", ns)
+                res_el   = period.find("ns:resolution", ns)
+                if start_el is None or res_el is None:
+                    continue
+                t0  = pd.Timestamp(start_el.text, tz="UTC")
+                res = int(res_el.text.replace("PT", "").replace("M", ""))
+                for pt in period.findall("ns:Point", ns):
+                    pos = int(pt.find("ns:position", ns).text)
+                    price = float(pt.find("ns:price.amount", ns).text)
+                    ts_dt = t0 + pd.Timedelta(minutes=res * (pos - 1))
+                    rows.append({"date": ts_dt.tz_convert("Europe/Helsinki").tz_localize(None),
+                                 "PriceArea": area, "price": price})
+        except Exception:
+            pass
+
+    if not rows:
+        return pd.DataFrame(columns=["date", "PriceArea", "price"])
+    df = pd.DataFrame(rows).dropna()
+    latest = df["date"].max()
+    return df[df["date"] >= latest - timedelta(days=days)].sort_values("date")
 
 
 # ── Derived metrics ────────────────────────────────────────────────────────────
@@ -251,10 +299,17 @@ st.markdown(
 )
 st.markdown(
     f'<div style="color:#8b8fa8;font-size:12px;margin-bottom:20px">'
-    f'Updated {datetime.now():%d.%m.%Y %H:%M} · Data: NOAA · Open-Meteo · Energi Data Service'
+    f'Updated {datetime.now():%d.%m.%Y %H:%M} · Data: NOAA · Open-Meteo · ENTSO-E Transparency Platform'
     f'</div>',
     unsafe_allow_html=True,
 )
+
+if not st.secrets.get("ENTSOE_API_KEY", ""):
+    st.warning(
+        "**Spot prices require an ENTSO-E API key.** "
+        "Register free at [transparency.entsoe.eu](https://transparency.entsoe.eu) → My Account → Security token. "
+        "Then add `ENTSOE_API_KEY = \"your-token\"` to the app's Streamlit secrets."
+    )
 
 # Fetch
 with st.spinner("Loading data..."):
