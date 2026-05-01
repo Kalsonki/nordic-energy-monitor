@@ -160,52 +160,50 @@ def wind_cf(ws: float) -> float:
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def fetch_prices(days: int = 90) -> pd.DataFrame:
-    api_key = st.secrets.get("ENTSOE_API_KEY", "")
-    if not api_key:
-        return pd.DataFrame(columns=["date", "PriceArea", "price"])
-
-    end = pd.Timestamp.now(tz="Europe/Helsinki")
-    start = end - pd.Timedelta(days=days)
+    """
+    Fetch spot prices from free sources (no API key needed):
+      SE1, SE3 — elprisetjustnu.se
+      FI        — porssisahko.net
+    """
     rows = []
 
-    for area, domain in ENTSOE_DOMAINS.items():
-        url = (
-            "https://web-api.tp.entsoe.eu/api"
-            f"?documentType=A44"
-            f"&in_Domain={domain}&out_Domain={domain}"
-            f"&periodStart={start.strftime('%Y%m%d%H%M')}"
-            f"&periodEnd={end.strftime('%Y%m%d%H%M')}"
-            f"&securityToken={api_key}"
-        )
-        try:
-            import xml.etree.ElementTree as ET
-            r = requests.get(url, timeout=20)
-            root = ET.fromstring(r.text)
-            ns = {"ns": "urn:iec62325.351:tc57wg16:451-3:publicationdocument:7:0"}
-            for ts in root.findall(".//ns:TimeSeries", ns):
-                period = ts.find("ns:Period", ns)
-                if period is None:
-                    continue
-                start_el = period.find("ns:timeInterval/ns:start", ns)
-                res_el   = period.find("ns:resolution", ns)
-                if start_el is None or res_el is None:
-                    continue
-                t0  = pd.Timestamp(start_el.text, tz="UTC")
-                res = int(res_el.text.replace("PT", "").replace("M", ""))
-                for pt in period.findall("ns:Point", ns):
-                    pos = int(pt.find("ns:position", ns).text)
-                    price = float(pt.find("ns:price.amount", ns).text)
-                    ts_dt = t0 + pd.Timedelta(minutes=res * (pos - 1))
-                    rows.append({"date": ts_dt.tz_convert("Europe/Helsinki").tz_localize(None),
-                                 "PriceArea": area, "price": price})
-        except Exception:
-            pass
+    # Swedish areas via elprisetjustnu.se
+    for area in ["SE1", "SE3"]:
+        for d in range(days, -1, -1):
+            date = datetime.now() - timedelta(days=d)
+            url = (
+                f"https://www.elprisetjustnu.se/api/v1/prices/"
+                f"{date.year}/{date.month:02d}-{date.day:02d}_{area}.json"
+            )
+            try:
+                data = requests.get(url, timeout=10).json()
+                for entry in data:
+                    rows.append({
+                        "date": pd.Timestamp(entry["time_start"]).tz_localize(None),
+                        "PriceArea": area,
+                        "price": round(entry["EUR_per_kWh"] * 1000, 2),  # → EUR/MWh
+                    })
+            except Exception:
+                pass
+
+    # Finland via porssisahko.net (returns ~2 days of hourly prices)
+    try:
+        fi = requests.get("https://api.porssisahko.net/v1/latest-prices.json", timeout=10).json()
+        for entry in fi.get("prices", []):
+            rows.append({
+                "date": pd.Timestamp(entry["startDate"]).tz_localize(None),
+                "PriceArea": "FI",
+                "price": round(entry["price"], 2),
+            })
+    except Exception:
+        pass
 
     if not rows:
         return pd.DataFrame(columns=["date", "PriceArea", "price"])
-    df = pd.DataFrame(rows).dropna()
+
+    df = pd.DataFrame(rows).dropna().sort_values("date")
     latest = df["date"].max()
-    return df[df["date"] >= latest - timedelta(days=days)].sort_values("date")
+    return df[df["date"] >= latest - timedelta(days=days)]
 
 
 # ── Derived metrics ────────────────────────────────────────────────────────────
@@ -304,12 +302,6 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-if not st.secrets.get("ENTSOE_API_KEY", ""):
-    st.warning(
-        "**Spot prices require an ENTSO-E API key.** "
-        "Register free at [transparency.entsoe.eu](https://transparency.entsoe.eu) → My Account → Security token. "
-        "Then add `ENTSOE_API_KEY = \"your-token\"` to the app's Streamlit secrets."
-    )
 
 # Fetch
 with st.spinner("Loading data..."):
@@ -484,7 +476,7 @@ if not price_df.empty:
                       annotation_text="High price (>150 €)",
                       annotation_position="top right",
                       annotation_font_color="#e63946", annotation_font_size=11)
-    for area in ["FI", "SE3", "NO2", "DK1"]:
+    for area in ["FI", "SE1", "SE3"]:
         ad = daily[daily["PriceArea"] == area].sort_values("date")
         if ad.empty:
             continue
