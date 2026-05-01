@@ -349,8 +349,8 @@ if not nao_df.empty:
         x=nao_df["date"], y=nao_df["nao"], marker_color=bar_colors,
         hovertemplate="%{x|%m/%Y}: %{y:+.2f}<extra></extra>",
     ))
-    fig.update_layout(**PLOT_LAYOUT, height=320, showlegend=False,
-                      yaxis=dict(range=[-4, 4], gridcolor="#2a2f3e", showgrid=True))
+    fig.update_layout({**PLOT_LAYOUT, "height": 320, "showlegend": False,
+                       "yaxis": dict(range=[-4, 4], gridcolor="#2a2f3e", showgrid=True)})
     st.plotly_chart(fig, use_container_width=True)
 else:
     st.info("NAO-data ei saatavilla juuri nyt.")
@@ -369,9 +369,9 @@ if not temp_df.empty:
             line=dict(color=CITY_COLORS[city], width=2), mode="lines",
             hovertemplate=f"{city}: %{{y:+.1f}}°C<extra></extra>",
         ))
-    fig.update_layout(**PLOT_LAYOUT, height=320,
-                      yaxis=dict(gridcolor="#2a2f3e", ticksuffix="°C",
-                                 title="Poikkeama normaalista"))
+    fig.update_layout({**PLOT_LAYOUT, "height": 320,
+                       "yaxis": dict(gridcolor="#2a2f3e", ticksuffix="°C",
+                                     title="Poikkeama normaalista")})
     st.plotly_chart(fig, use_container_width=True)
 else:
     st.info("Lämpötiladata ei saatavilla.")
@@ -398,9 +398,9 @@ if not wind_df.empty:
             line=dict(color=site_colors.get(site, "#fff"), width=2), mode="lines",
             hovertemplate=f"{site}: %{{y:.1f}} %<extra></extra>",
         ))
-    fig.update_layout(**PLOT_LAYOUT, height=300,
-                      yaxis=dict(gridcolor="#2a2f3e", ticksuffix=" %",
-                                 title="Kapasiteetti­kerroin", range=[0, 100]))
+    fig.update_layout({**PLOT_LAYOUT, "height": 300,
+                       "yaxis": dict(gridcolor="#2a2f3e", ticksuffix=" %",
+                                     title="Kapasiteetti­kerroin", range=[0, 100])})
     st.plotly_chart(fig, use_container_width=True)
 else:
     st.info("Tuulidata ei saatavilla.")
@@ -433,9 +433,9 @@ if not price_df.empty:
             line=dict(color=AREA_COLORS[area], width=2), mode="lines",
             hovertemplate=f"{AREA_LABELS.get(area, area)}: %{{y:.0f}} €/MWh<extra></extra>",
         ))
-    fig.update_layout(**PLOT_LAYOUT, height=320,
-                      yaxis=dict(gridcolor="#2a2f3e", ticksuffix=" €",
-                                 title="EUR/MWh"))
+    fig.update_layout({**PLOT_LAYOUT, "height": 320,
+                       "yaxis": dict(gridcolor="#2a2f3e", ticksuffix=" €",
+                                     title="EUR/MWh")})
     st.plotly_chart(fig, use_container_width=True)
 else:
     st.info("Hintadata ei saatavilla.")
