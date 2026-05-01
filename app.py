@@ -37,7 +37,7 @@ WIND_SITES = {
     "FI-West":  (63.0, 22.0),
 }
 
-AREA_LABELS = {"FI": "Suomi", "SE3": "Ruotsi (SE3)", "NO2": "Norja (NO2)", "DK1": "Tanska (DK1)"}
+AREA_LABELS = {"FI": "Finland", "SE3": "Sweden (SE3)", "NO2": "Norway (NO2)", "DK1": "Denmark (DK1)"}
 CITY_COLORS = {
     "Helsinki": "#00b4d8", "Stockholm": "#f4d03f",
     "Oslo": "#2ecc71", "Copenhagen": "#ff6b35", "Oulu": "#e63946",
@@ -210,12 +210,12 @@ def risk_color(s: float) -> str:
 
 def risk_label(s: float) -> str:
     if s >= 7.5:
-        return "KRIITTINEN"
+        return "CRITICAL"
     if s >= 5.5:
-        return "KORKEA"
+        return "HIGH"
     if s >= 3.5:
-        return "KOHTALAINEN"
-    return "MATALA"
+        return "MODERATE"
+    return "LOW"
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -250,13 +250,13 @@ st.markdown(
 )
 st.markdown(
     f'<div style="color:#8b8fa8;font-size:12px;margin-bottom:20px">'
-    f'Päivitetty {datetime.now():%d.%m.%Y %H:%M} · Data: NOAA · Open-Meteo · Energi Data Service'
+    f'Updated {datetime.now():%d.%m.%Y %H:%M} · Data: NOAA · Open-Meteo · Energi Data Service'
     f'</div>',
     unsafe_allow_html=True,
 )
 
 # Fetch
-with st.spinner("Haetaan data..."):
+with st.spinner("Loading data..."):
     nao_df   = fetch_nao()
     temp_raw = fetch_temperature(365)
     wind_df  = fetch_wind(90)
@@ -286,61 +286,61 @@ rs = risk_score(latest_nao, hdd_dev_avg, price_avg)
 
 # ── KPI Row ────────────────────────────────────────────────────────────────────
 
-section("Tilanne nyt")
+section("Current Status")
 c1, c2, c3, c4, c5 = st.columns(5)
 
 with c1:
     val = f"{latest_nao:+.2f}" if latest_nao is not None else "–"
-    delta = f"{latest_nao - prev_nao:+.2f} ed. kk" if latest_nao is not None and prev_nao is not None else ""
+    delta = f"{latest_nao - prev_nao:+.2f} prev. month" if latest_nao is not None and prev_nao is not None else ""
     col = "#e63946" if latest_nao is not None and latest_nao < -1 else \
           "#ff6b35" if latest_nao is not None and latest_nao < 0 else \
           "#2ecc71" if latest_nao is not None and latest_nao > 0.5 else "#00b4d8"
-    lbl = "Negatiivinen" if latest_nao is not None and latest_nao < -0.5 else \
-          "Positiivinen" if latest_nao is not None and latest_nao > 0.5 else "Neutraali"
+    lbl = "Negative" if latest_nao is not None and latest_nao < -0.5 else \
+          "Positive" if latest_nao is not None and latest_nao > 0.5 else "Neutral"
     st.markdown(kpi_card(f"NAO ({nao_month})", val, lbl, col, delta), unsafe_allow_html=True)
 
 with c2:
-    val  = f"{hdd_dev_avg:+.1f} HDD/pv" if hdd_dev_avg is not None else "–"
+    val  = f"{hdd_dev_avg:+.1f} HDD/day" if hdd_dev_avg is not None else "–"
     col  = "#e63946" if hdd_dev_avg is not None and hdd_dev_avg > 2 else \
            "#2ecc71" if hdd_dev_avg is not None and hdd_dev_avg < -2 else "#00b4d8"
-    lbl  = "Kylmempää kuin normaali" if hdd_dev_avg is not None and hdd_dev_avg > 1 else \
-           "Lämpimämpää kuin normaali" if hdd_dev_avg is not None and hdd_dev_avg < -1 else "Normaali"
-    st.markdown(kpi_card("HDD-poikkeama 30 pv", val, lbl, col, "ka. 5 kaupunkia"), unsafe_allow_html=True)
+    lbl  = "Colder than normal" if hdd_dev_avg is not None and hdd_dev_avg > 1 else \
+           "Warmer than normal" if hdd_dev_avg is not None and hdd_dev_avg < -1 else "Near normal"
+    st.markdown(kpi_card("HDD Deviation 30d", val, lbl, col, "avg. 5 cities"), unsafe_allow_html=True)
 
 with c3:
     val = f"{cf_avg*100:.0f} %" if cf_avg is not None else "–"
     col = "#e63946" if cf_avg is not None and cf_avg < 0.15 else \
           "#2ecc71" if cf_avg is not None and cf_avg > 0.35 else "#00b4d8"
-    lbl = "Heikko tuulisuus" if cf_avg is not None and cf_avg < 0.15 else \
-          "Hyvä tuulisuus" if cf_avg is not None and cf_avg > 0.35 else "Kohtalainen"
-    st.markdown(kpi_card("Tuulikapasiteetti 30 pv", val, lbl, col, "4 alue ka."), unsafe_allow_html=True)
+    lbl = "Low wind" if cf_avg is not None and cf_avg < 0.15 else \
+          "Good wind" if cf_avg is not None and cf_avg > 0.35 else "Moderate"
+    st.markdown(kpi_card("Wind Capacity 30d", val, lbl, col, "avg. 4 regions"), unsafe_allow_html=True)
 
 with c4:
     val   = f"{price_avg:.0f} €/MWh" if price_avg is not None else "–"
-    delta = f"{price_avg - prev_week:+.0f} ed. viikko" if price_avg is not None and prev_week is not None else ""
+    delta = f"{price_avg - prev_week:+.0f} prev. week" if price_avg is not None and prev_week is not None else ""
     col   = "#e63946" if price_avg is not None and price_avg > 150 else \
             "#ff6b35" if price_avg is not None and price_avg > 80  else \
             "#2ecc71" if price_avg is not None and price_avg < 30  else "#00b4d8"
-    lbl   = "Korkea" if price_avg is not None and price_avg > 150 else \
-            "Kohtalainen" if price_avg is not None and price_avg > 50 else "Matala"
-    st.markdown(kpi_card("Spot-hinta 7 pv ka", val, lbl, col, delta), unsafe_allow_html=True)
+    lbl   = "High" if price_avg is not None and price_avg > 150 else \
+            "Moderate" if price_avg is not None and price_avg > 50 else "Low"
+    st.markdown(kpi_card("Spot Price 7d avg", val, lbl, col, delta), unsafe_allow_html=True)
 
 with c5:
     col = risk_color(rs)
     lbl = risk_label(rs)
-    st.markdown(kpi_card("Kokonaisriski", f"{rs:.1f}/10", lbl, col, "NAO + HDD + hinta"), unsafe_allow_html=True)
+    st.markdown(kpi_card("Overall Risk", f"{rs:.1f}/10", lbl, col, "NAO + HDD + price"), unsafe_allow_html=True)
 
 # ── NAO ───────────────────────────────────────────────────────────────────────
 
-section("NAO-indeksi — 36 kuukautta")
+section("NAO Index — 36 months")
 
 if not nao_df.empty:
     fig = go.Figure()
     fig.add_hrect(y0=-5, y1=-1, fillcolor="rgba(230,57,70,.12)", line_width=0,
-                  annotation_text="Korkea riski (NAO < −1)", annotation_position="top left",
+                  annotation_text="High risk (NAO < −1)", annotation_position="top left",
                   annotation_font_color="#e63946", annotation_font_size=11)
     fig.add_hrect(y0=1, y1=5, fillcolor="rgba(46,204,113,.07)", line_width=0,
-                  annotation_text="Matala riski (NAO > +1)", annotation_position="bottom right",
+                  annotation_text="Low risk (NAO > +1)", annotation_position="bottom right",
                   annotation_font_color="#2ecc71", annotation_font_size=11)
     fig.add_hline(y=0,    line_dash="dot",  line_color="#8b8fa8", line_width=1)
     fig.add_hline(y=-1.0, line_dash="dash", line_color="#e63946", line_width=1)
@@ -353,11 +353,11 @@ if not nao_df.empty:
                        "yaxis": dict(range=[-4, 4], gridcolor="#2a2f3e", showgrid=True)})
     st.plotly_chart(fig, use_container_width=True)
 else:
-    st.info("NAO-data ei saatavilla juuri nyt.")
+    st.info("NAO data unavailable.")
 
 # ── Temperature deviation ─────────────────────────────────────────────────────
 
-section("Lämpötilapoikkeama normaalista — 7 pv liukuva ka")
+section("Temperature Deviation from Normal — 7-day rolling avg")
 
 if not temp_df.empty:
     fig = go.Figure()
@@ -371,14 +371,14 @@ if not temp_df.empty:
         ))
     fig.update_layout({**PLOT_LAYOUT, "height": 320,
                        "yaxis": dict(gridcolor="#2a2f3e", ticksuffix="°C",
-                                     title="Poikkeama normaalista")})
+                                     title="Deviation from normal")})
     st.plotly_chart(fig, use_container_width=True)
 else:
-    st.info("Lämpötiladata ei saatavilla.")
+    st.info("Temperature data unavailable.")
 
 # ── Wind CF ───────────────────────────────────────────────────────────────────
 
-section("Tuulikapasiteetti (CF) — 7 pv liukuva ka")
+section("Wind Capacity Factor — 7-day rolling avg")
 
 if not wind_df.empty:
     site_colors = {
@@ -387,7 +387,7 @@ if not wind_df.empty:
     }
     fig = go.Figure()
     fig.add_hrect(y0=0, y1=0.15, fillcolor="rgba(230,57,70,.08)", line_width=0,
-                  annotation_text="Heikko tuulisuus", annotation_position="top right",
+                  annotation_text="Low wind output", annotation_position="top right",
                   annotation_font_color="#e63946", annotation_font_size=11)
     for site in WIND_SITES:
         sd = wind_df[wind_df["site"] == site].sort_values("date")
@@ -400,14 +400,14 @@ if not wind_df.empty:
         ))
     fig.update_layout({**PLOT_LAYOUT, "height": 300,
                        "yaxis": dict(gridcolor="#2a2f3e", ticksuffix=" %",
-                                     title="Kapasiteetti­kerroin", range=[0, 100])})
+                                     title="Capacity factor", range=[0, 100])})
     st.plotly_chart(fig, use_container_width=True)
 else:
-    st.info("Tuulidata ei saatavilla.")
+    st.info("Wind data unavailable.")
 
 # ── Spot prices ───────────────────────────────────────────────────────────────
 
-section("Sähkön spot-hinnat — 90 päivää")
+section("Electricity Spot Prices — 90 days")
 
 if not price_df.empty:
     daily = (
@@ -420,7 +420,7 @@ if not price_df.empty:
     if p_max > 80:
         fig.add_hrect(y0=150, y1=max(200, p_max * 1.1),
                       fillcolor="rgba(230,57,70,.08)", line_width=0,
-                      annotation_text="Korkea hinta (>150 €)",
+                      annotation_text="High price (>150 €)",
                       annotation_position="top right",
                       annotation_font_color="#e63946", annotation_font_size=11)
     for area in ["FI", "SE3", "NO2", "DK1"]:
@@ -438,25 +438,25 @@ if not price_df.empty:
                                      title="EUR/MWh")})
     st.plotly_chart(fig, use_container_width=True)
 else:
-    st.info("Hintadata ei saatavilla.")
+    st.info("Price data unavailable.")
 
 # ── Scenario matching ─────────────────────────────────────────────────────────
 
-section("Skenaariovertailu — mikä tilanne muistuttaa nyt?")
+section("Scenario Comparison — which situation does the current data resemble?")
 
 SCENARIOS = [
-    dict(name="Stressi: kylmä + tuuleton", risk=9.2, color="#e63946",
-         desc="Negatiivinen NAO, pakkanen, heikko tuuli, matalat reservoaarit",
-         nao="< −1.0", hdd="> +3 HDD/pv", wind="< 15 %", price="> 150 €/MWh"),
-    dict(name="Perusskenaario", risk=4.0, color="#00b4d8",
-         desc="SSP2-4.5 keskeinen polku, normaalit olosuhteet",
-         nao="−0.5 – +0.5", hdd="±1 HDD/pv", wind="25–35 %", price="50–90 €/MWh"),
-    dict(name="Märkä ja tuulinen", risk=1.8, color="#2ecc71",
-         desc="Positiivinen NAO, lauha, tuulinen, korkeat reservoaarit",
-         nao="> +1.0", hdd="< −2 HDD/pv", wind="> 40 %", price="< 40 €/MWh"),
-    dict(name="Rakenteellinen lämpeneminen", risk=6.5, color="#f4d03f",
-         desc="SSP5-8.5 pitkän aikavälin polku, kasvava epävarmuus",
-         nao="vaihteleva", hdd="laskeva trendi", wind="epävarma", price="rakenteellinen muutos"),
+    dict(name="Stress: cold + low wind", risk=9.2, color="#e63946",
+         desc="Negative NAO, frost, wind drought, low reservoirs",
+         nao="< −1.0", hdd="> +3 HDD/day", wind="< 15 %", price="> 150 €/MWh"),
+    dict(name="Base scenario", risk=4.0, color="#00b4d8",
+         desc="SSP2-4.5 central path, normal conditions",
+         nao="−0.5 – +0.5", hdd="±1 HDD/day", wind="25–35 %", price="50–90 €/MWh"),
+    dict(name="Wet & windy", risk=1.8, color="#2ecc71",
+         desc="Positive NAO, mild, windy, high reservoirs",
+         nao="> +1.0", hdd="< −2 HDD/day", wind="> 40 %", price="< 40 €/MWh"),
+    dict(name="Structural warming", risk=6.5, color="#f4d03f",
+         desc="SSP5-8.5 high-emissions path, growing uncertainty",
+         nao="variable", hdd="declining trend", wind="uncertain", price="structural shift"),
 ]
 
 # Which scenario best matches current risk?
@@ -465,7 +465,7 @@ best_match = diffs.index(min(diffs))
 
 cols = st.columns(4)
 for i, s in enumerate(SCENARIOS):
-    badge = " ← TILANNE NYT" if i == best_match else ""
+    badge = " ← CURRENT" if i == best_match else ""
     with cols[i]:
         st.markdown(f"""
         <div style="background:#1a1f2e;border-radius:12px;padding:16px;
@@ -473,12 +473,12 @@ for i, s in enumerate(SCENARIOS):
             <div style="color:#8b8fa8;font-size:11px;font-weight:700;
                         text-transform:uppercase;letter-spacing:.6px">{s['name']}</div>
             <div style="color:{s['color']};font-size:22px;font-weight:700;
-                        margin:6px 0">Riski {s['risk']}/10{badge}</div>
+                        margin:6px 0">Risk {s['risk']}/10{badge}</div>
             <div style="color:#8b8fa8;font-size:11px;margin-bottom:10px">{s['desc']}</div>
             <div style="color:#e0e0e0;font-size:12px">NAO: {s['nao']}</div>
             <div style="color:#e0e0e0;font-size:12px">HDD: {s['hdd']}</div>
-            <div style="color:#e0e0e0;font-size:12px">Tuuli: {s['wind']}</div>
-            <div style="color:#e0e0e0;font-size:12px">Hinta: {s['price']}</div>
+            <div style="color:#e0e0e0;font-size:12px">Wind: {s['wind']}</div>
+            <div style="color:#e0e0e0;font-size:12px">Price: {s['price']}</div>
         </div>
         """, unsafe_allow_html=True)
 
@@ -487,10 +487,10 @@ for i, s in enumerate(SCENARIOS):
 st.markdown("---")
 st.markdown(
     '<div style="color:#8b8fa8;font-size:11px">'
-    'Data: NOAA CPC (NAO-indeksi) · Open-Meteo Archive API (lämpötila, tuuli) · '
-    'Energi Data Service / Energinet (spot-hinnat, alueet FI/SE3/NO2/DK1) · '
-    'Tuulikapasiteetti laskettu yksinkertaistetulla tehokäyrällä · '
-    'Analyysiviitekehys: Nordic Weather Futures'
+    'Data: NOAA CPC (NAO index) · Open-Meteo Archive API (temperature, wind) · '
+    'Energi Data Service / Energinet (spot prices, areas FI/SE3/NO2/DK1) · '
+    'Wind capacity factor estimated via simplified power curve · '
+    'Analysis framework: Nordic Weather Futures'
     '</div>',
     unsafe_allow_html=True,
 )
