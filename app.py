@@ -138,14 +138,12 @@ def wind_cf(ws: float) -> float:
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def fetch_prices(days: int = 90) -> pd.DataFrame:
-    end = datetime.now()
-    start = end - timedelta(days=days)
+    # Fetch latest available records (no date filter — API data may lag months behind today)
     url = (
         "https://api.energidataservice.dk/dataset/Elspotprices"
-        f"?limit=100000"
+        f"?limit={days * 24 * 4}"
         f'&filter={{"PriceArea":["DK1","FI","NO2","SE3"]}}'
-        f"&start={start:%Y-%m-%dT00:00}&end={end:%Y-%m-%dT00:00}"
-        "&sort=HourDK%20ASC"
+        "&sort=HourDK%20DESC"
     )
     try:
         data = requests.get(url, timeout=20).json()
@@ -154,7 +152,10 @@ def fetch_prices(days: int = 90) -> pd.DataFrame:
             return df
         df["date"] = pd.to_datetime(df["HourDK"])
         df["price"] = pd.to_numeric(df["SpotPriceEUR"], errors="coerce")
-        return df[["date", "PriceArea", "price"]].dropna()
+        df = df[["date", "PriceArea", "price"]].dropna()
+        # Keep only the most recent `days` days relative to latest data point
+        latest = df["date"].max()
+        return df[df["date"] >= latest - timedelta(days=days)].sort_values("date")
     except Exception:
         return pd.DataFrame(columns=["date", "PriceArea", "price"])
 
@@ -275,12 +276,17 @@ hdd_dev_avg = recent_temp["hdd_dev"].mean() if not recent_temp.empty else None
 recent_wind = wind_df[wind_df["date"] >= datetime.now() - timedelta(days=30)] if not wind_df.empty else pd.DataFrame()
 cf_avg      = recent_wind["cf"].mean() if not recent_wind.empty else None
 
-recent_price = price_df[price_df["date"] >= datetime.now() - timedelta(days=7)] if not price_df.empty else pd.DataFrame()
-price_avg    = recent_price["price"].mean() if not recent_price.empty else None
-prev_week    = price_df[
-    (price_df["date"] >= datetime.now() - timedelta(days=14)) &
-    (price_df["date"] <  datetime.now() - timedelta(days=7))
-]["price"].mean() if not price_df.empty else None
+if not price_df.empty:
+    price_latest = price_df["date"].max()
+    recent_price = price_df[price_df["date"] >= price_latest - timedelta(days=7)]
+    price_avg    = recent_price["price"].mean() if not recent_price.empty else None
+    prev_week    = price_df[
+        (price_df["date"] >= price_latest - timedelta(days=14)) &
+        (price_df["date"] <  price_latest - timedelta(days=7))
+    ]["price"].mean()
+else:
+    price_avg = None
+    prev_week = None
 
 rs = risk_score(latest_nao, hdd_dev_avg, price_avg)
 
