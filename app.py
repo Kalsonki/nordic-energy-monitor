@@ -101,32 +101,32 @@ def fetch_nao_monthly_all() -> pd.DataFrame:
         return pd.DataFrame(columns=["date", "nao", "month"])
 
 
-@st.cache_data(ttl=43200, show_spinner=False)
+@st.cache_data(ttl=86400, show_spinner=False)
 def fetch_nao() -> pd.DataFrame:
-    """Daily NAO from NOAA CPC — future dates are forecasts."""
+    """Monthly NAO from NOAA CPC — last 36 months."""
     url = ("https://www.cpc.ncep.noaa.gov/products/precip/CWlink/pna/"
-           "norm.nao.daily.b500101.current.ascii")
-    today = datetime.now().date()
+           "norm.nao.monthly.b5001.current.ascii.table")
     try:
         r = requests.get(url, timeout=15)
         r.raise_for_status()
         rows = []
-        for line in r.text.strip().splitlines():
+        for line in r.text.strip().splitlines()[1:]:
             parts = line.split()
-            if len(parts) < 4:
+            if len(parts) < 2:
                 continue
-            try:
-                yr, mo, dy, val = int(parts[0]), int(parts[1]), int(parts[2]), float(parts[3])
+            year = int(parts[0])
+            for m, v in enumerate(parts[1:13], 1):
+                try:
+                    val = float(v)
+                except ValueError:
+                    continue
                 if val == -99.9:
                     continue
-                dt = pd.Timestamp(year=yr, month=mo, day=dy)
-                rows.append({"date": dt, "nao": val,
-                             "forecast": dt.date() > today,
-                             "winter": mo in (10, 11, 12, 1, 2, 3, 4)})
-            except Exception:
-                pass
+                rows.append({"date": pd.Timestamp(year=year, month=m, day=1),
+                             "nao": val, "forecast": False,
+                             "winter": m in (10, 11, 12, 1, 2, 3, 4)})
         df = pd.DataFrame(rows)
-        cutoff = pd.Timestamp.now() - pd.DateOffset(days=120)
+        cutoff = pd.Timestamp.now() - pd.DateOffset(months=36)
         return df[df["date"] >= cutoff].reset_index(drop=True)
     except Exception:
         return pd.DataFrame(columns=["date", "nao", "forecast", "winter"])
@@ -434,7 +434,7 @@ with c5:
 
 # ── NAO ───────────────────────────────────────────────────────────────────────
 
-section("NAO Index — Daily (120 days + 2-week forecast)")
+section("NAO Index — Monthly (36 months, Oct–Apr winter highlighted)")
 
 chart_col, info_col = st.columns([3, 1])
 
@@ -515,15 +515,15 @@ with chart_col:
               <div style="color:#8b8fa8;font-size:11px">{phase} phase in a row</div>
             </div>""", unsafe_allow_html=True)
         with p3:
-            fct_val = fct["nao"].mean() if not fct.empty else None
-            fct_color = "#e63946" if fct_val is not None and fct_val < -0.5 else \
-                        "#2ecc71" if fct_val is not None and fct_val > 0.5 else "#00b4d8"
-            fct_str = f"{fct_val:+.2f}" if fct_val is not None else "–"
+            winter_avg = nao_hist[nao_hist["month"].isin([10,11,12,1,2,3,4])]["nao"].mean() \
+                         if not nao_hist.empty else None
+            wa_color = "#00b4d8"
+            wa_str = f"{winter_avg:+.2f}" if winter_avg is not None else "–"
             st.markdown(f"""
-            <div style="background:#1a1f2e;border-radius:8px;padding:12px 16px;border-left:3px solid {fct_color}">
-              <div style="color:#8b8fa8;font-size:11px;text-transform:uppercase;letter-spacing:.6px">Forecast avg (14d)</div>
-              <div style="color:{fct_color};font-size:24px;font-weight:700">{fct_str}</div>
-              <div style="color:#8b8fa8;font-size:11px">NOAA CPC ensemble</div>
+            <div style="background:#1a1f2e;border-radius:8px;padding:12px 16px;border-left:3px solid {wa_color}">
+              <div style="color:#8b8fa8;font-size:11px;text-transform:uppercase;letter-spacing:.6px">Historical winter mean</div>
+              <div style="color:{wa_color};font-size:24px;font-weight:700">{wa_str}</div>
+              <div style="color:#8b8fa8;font-size:11px">Oct–Apr avg since 1950</div>
             </div>""", unsafe_allow_html=True)
     else:
         st.info("NAO data unavailable.")
